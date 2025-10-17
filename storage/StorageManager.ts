@@ -141,13 +141,8 @@ export class StorageManager<inputType, PublicData, PrivateData> {
       `private/snapshot/${identityId}/${this.s3PrivatePrefix}.json`;
   }
 
-  private getS3DevicePathFunction(): ({
-    identityId,
-  }: {
-    identityId?: string | undefined;
-  }) => string {
-    return ({ identityId }) =>
-      `private/snapshot/${identityId}/metadata/deviceKey/${this.dataType}.json`;
+  private getS3DevicePathFunction(): string {
+    return `public/metadata/deviceKey/${this.dataType}.json`;
   }
 
   /**

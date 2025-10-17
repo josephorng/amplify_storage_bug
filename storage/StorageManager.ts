@@ -21,6 +21,10 @@ import {
 } from "@/storage/types";
 import PATHS from "@/storage/path";
 import { getCurrentUser } from "aws-amplify/auth";
+import { Amplify } from 'aws-amplify';
+import outputs from '../amplify_outputs.json';
+
+Amplify.configure(outputs);
 
 interface StorageManagerProps {
   daysToLive: number;
@@ -805,6 +809,8 @@ export class StorageManager<inputType, PublicData, PrivateData> {
 
       // Clear private data store
       await this.clearObjectStore(this.privateStoreName);
+
+      await this.clearObjectStore(this.metadataStoreName);
 
       console.log("Entire IndexedDB database cleared successfully");
 
@@ -2091,11 +2097,15 @@ export class StorageManager<inputType, PublicData, PrivateData> {
     details: string;
     error?: string;
   }> {
+    let localDeviceKey: string | null = null;
+    let s3DeviceKey: string | null = null;
+    
     try {
       // Get device keys from metadata and S3
-      const { lastUsedDevice: s3DeviceKey, lastUpdated: s3LastUpdated } =
+      const { lastUsedDevice: s3DeviceKeyResult, lastUpdated: s3LastUpdated } =
         await this.getLastUsedDeviceFromS3();
-      const localDeviceKey = await this.getDeviceKey();
+      s3DeviceKey = s3DeviceKeyResult;
+      localDeviceKey = await this.getDeviceKey();
       const localLastUpdated = await this.getPrivateDataLastUpdatedTime();
 
       console.log("sync", this.dataType);
@@ -2127,7 +2137,7 @@ export class StorageManager<inputType, PublicData, PrivateData> {
             storeName: this.dataType,
             success: true,
             action: "no_action_needed",
-            details: "Device keys match, data is in sync",
+            details: `Device keys match, data is in sync. Local: ${localDeviceKey}, S3: ${s3DeviceKey}`,
           };
         } else if (s3LastUpdated && s3LastUpdated > localLastUpdated) {
           console.log(
@@ -2143,8 +2153,7 @@ export class StorageManager<inputType, PublicData, PrivateData> {
             success: downloadResult.success,
             action: downloadResult.action,
             details:
-              "Device keys match, local is older, downloading from S3: " +
-              downloadResult.details,
+              `Device keys match, local is older, downloading from S3: ${downloadResult.details}. Local: ${localDeviceKey}, S3: ${s3DeviceKey}`,
           };
         } else {
           console.log(
@@ -2161,8 +2170,7 @@ export class StorageManager<inputType, PublicData, PrivateData> {
             success: uploadResult.success,
             action: uploadResult.action,
             details:
-              "Device keys match, local is newer, uploading to S3: " +
-              uploadResult.details,
+              `Device keys match, local is newer, uploading to S3: ${uploadResult.details}. Local: ${localDeviceKey}, S3: ${s3DeviceKey}`,
           };
         }
       }
@@ -2182,8 +2190,7 @@ export class StorageManager<inputType, PublicData, PrivateData> {
           success: downloadResult.success,
           action: downloadResult.action,
           details:
-            "S3 has different device key, downloading from S3: " +
-            downloadResult.details,
+            `S3 has different device key, downloading from S3: ${downloadResult.details}. Local: ${localDeviceKey}, S3: ${s3DeviceKey}`,
         };
       }
 
@@ -2202,12 +2209,7 @@ export class StorageManager<inputType, PublicData, PrivateData> {
           success: uploadResult.success,
           action: uploadResult.action,
           details:
-            "No S3 device key, uploading to S3: " +
-            uploadResult.details +
-            " localDeviceKey: " +
-            localDeviceKey +
-            " s3DeviceKey: " +
-            s3DeviceKey,
+            `No S3 device key, uploading to S3: ${uploadResult.details}. Local: ${localDeviceKey}, S3: ${s3DeviceKey}`,
         };
       }
     } catch (error) {
@@ -2220,7 +2222,7 @@ export class StorageManager<inputType, PublicData, PrivateData> {
         storeName: this.dataType,
         success: false,
         action: "no_action_needed",
-        details: "Error syncing private data with backend",
+        details: `Error syncing private data with backend. Local: ${localDeviceKey || 'unknown'}, S3: ${s3DeviceKey || 'unknown'}`,
         error: error instanceof Error ? error.message : "Unknown error",
       };
     } finally {
@@ -2393,59 +2395,7 @@ export class StorageManager<inputType, PublicData, PrivateData> {
    * Download private data and input data from S3 and update local storage
    */
   private async downloadPrivateDataFromS3(): Promise<void> {
-    try {
-      if (!this.usePrivateData) return;
-      console.log(
-        "xxxx downloadPrivateDataFromS3 > downloadData",
-        this.getS3PrivatePathFunction()
-      );
-      const s3DataResult = await downloadData({
-        path: this.getS3PrivatePathFunction(),
-      }).result;
-      const text = await s3DataResult.body.text();
-      const s3DataObj = JSON.parse(text);
-      if (!s3DataObj) {
-        throw new Error("No S3 sync data found");
-      }
-
-      // Type assertion for sync data structure
-      const syncData = s3DataObj as any;
-      if (!syncData.privateData) {
-        console.log("xxxx syncData", syncData);
-        throw new Error("Invalid S3 sync data format");
-      }
-
-      // Clear existing private data
-      await this.clearAllPrivateData(false);
-
-      // Import the private data from S3
-      console.log("Importing private data from S3", syncData.privateData);
-      for (const privateDataItem of syncData.privateData) {
-        if (privateDataItem.key && privateDataItem.data && this.userId) {
-          await this.setPrivateIndexedDBData(
-            {
-              key: privateDataItem.key,
-              learnerId: privateDataItem.learnerId!,
-              userId: this.userId,
-              lastRead: Date.now(),
-              lastModified: Date.now(),
-              data: privateDataItem.data as PrivateData,
-              createdAt: privateDataItem.createdAt || Date.now(),
-              dataType: this.dataType,
-              deleted: privateDataItem.deleted || false,
-            },
-            false
-          );
-        }
-      }
-
-      console.log(
-        "Successfully downloaded and imported data from S3",
-        this.dataType
-      );
-    } catch (error) {
-      throw error;
-    }
+    return;
   }
 
   /**
@@ -2454,37 +2404,7 @@ export class StorageManager<inputType, PublicData, PrivateData> {
   private async uploadPrivateDataToS3(
     privateData: IndexedDBPrivateData<PrivateData>[]
   ): Promise<void> {
-    try {
-      const syncData = {
-        lastModified: Date.now(),
-        privateData: privateData,
-        userId: this.userId,
-        privateTotal: privateData.length,
-        totalItems: privateData.length,
-      };
-
-      // Use the existing setS3Data method but with a custom data structure
-      console.log("xxxx uploadPrivateDataToS3 > uploadData", syncData);
-      const uploadResult = await uploadData({
-        path: this.getS3PrivatePathFunction(),
-        data: JSON.stringify(syncData),
-        options: {
-          contentType: "application/json",
-        },
-      }).result;
-
-      console.log("xxxx uploadResult", uploadResult);
-      await this.savePrivateDataLastUpdatedTime(Date.now());
-
-      console.log("Successfully uploaded private data to S3", this.dataType);
-    } catch (error) {
-      console.error(
-        "Error uploading private data to S3:",
-        this.dataType,
-        error
-      );
-      throw error;
-    }
+    return;
   }
 
   /**
@@ -2857,12 +2777,6 @@ export class StorageManager<inputType, PublicData, PrivateData> {
       
       const s3DataResult = await downloadData({
         path: s3Path,
-        options: {
-          // Add cache-busting to prevent stale data
-          useAccelerateEndpoint: false,
-          // Force fresh data by adding a timestamp query parameter
-          // Note: This might not work with all S3 configurations
-        }
       }).result;
       
       console.log(
